@@ -13,6 +13,81 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 templates = Jinja2Templates(directory="templates")
 
+def get_db():
+    conn = mysql.connector.connect(
+        host=os.environ["DB_HOST"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+        database=os.environ["DB_NAME"],
+    )
+    cursor = conn.cursor(dictionary=True)
+    try:
+        yield conn, cursor
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_scores(cursor):
+    cursor.execute(
+        "SELECT username, attempts FROM scores ORDER BY attempts ASC LIMIT 10"
+    )
+    return cursor.fetchall()
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request, db_data: tuple = Depends(get_db)):
+    conn, cursor = db_data
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "scores": get_scores(cursor),
+            "message": "",
+            "username": ""
+        }
+    )
+
+@app.post("/guess", response_class=HTMLResponse)
+def guess(
+    request: Request, 
+    username: str = Form(...), 
+    number: int = Form(...),
+    db_data: tuple = Depends(get_db)
+):
+    conn, cursor = db_data
+    # Note: Global state is still used here for demonstration, 
+    # but MUST be moved to client cookies/sessions or the database for production.
+    global SECRET_NUMBER
+    global attempts
+
+    attempts += 1
+    message = ""
+
+    if number < SECRET_NUMBER:
+        message = "Too low!"
+    elif number > SECRET_NUMBER:
+        message = "Too high!"
+    else:
+        # Corrected variables
+        cursor.execute(
+            "INSERT INTO scores (username, attempts) VALUES (%s, %s)",
+            (username, attempts)
+        )
+        conn.commit()
+
+        message = f"Correct! You guessed it in {attempts} attempts."
+        SECRET_NUMBER = random.randint(1, 100)
+        attempts = 0
+
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "scores": get_scores(cursor),
+            "message": message,
+            "username": username
+        }
+    )
+
 # MySQL connection
 @asynccontextmanager
 async def lifespan(app: FastAPI):
